@@ -488,7 +488,6 @@ app.post("/setup/api/convos/setup", requireSetupAuth, async (req, res) => {
 
     res.json({
       success: true,
-      qrDataUrl: result.qrDataUrl,
       inviteUrl: result.inviteUrl,
       conversationId: result.conversationId,
     });

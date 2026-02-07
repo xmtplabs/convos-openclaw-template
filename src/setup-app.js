@@ -301,6 +301,8 @@
           if (completeSetupBtn) completeSetupBtn.style.display = 'none';
           var qrImg = document.getElementById('convos-qr');
           if (qrImg) qrImg.style.display = 'none';
+          var qrWrap = document.getElementById('convos-qr-wrap');
+          if (qrWrap) { qrWrap.innerHTML = ''; qrWrap.style.display = 'none'; }
           var qrInfoEl = document.getElementById('qr-info');
           if (qrInfoEl) qrInfoEl.style.display = 'none';
           var loadingEl = document.getElementById('convos-loading');
@@ -348,15 +350,27 @@
         throw new Error(data.error || 'Setup failed');
       }
 
-      appendLog('Onboarding complete. Convos invite created.\n');
+      appendLog('Convos invite created. Waiting for join...\n');
 
-      // Hide loading, show QR image
+      // Hide loading
       if (loadingEl) loadingEl.style.display = 'none';
 
+      // Generate QR on client from invite URL (qrcodejs: renders into element)
       var qrImg = document.getElementById('convos-qr');
-      if (qrImg && data.qrDataUrl) {
-        qrImg.src = data.qrDataUrl;
-        qrImg.style.display = 'block';
+      var qrWrap = document.getElementById('convos-qr-wrap');
+      if (data.inviteUrl && typeof QRCode !== 'undefined' && qrWrap) {
+        try {
+          qrWrap.innerHTML = '';
+          new QRCode(qrWrap, { text: data.inviteUrl, width: 100, height: 100 });
+          qrWrap.style.display = 'block';
+          if (qrImg) qrImg.style.display = 'none';
+        } catch (err) {
+          console.warn('[convos-setup] QR generation failed:', err);
+        }
+      } else if (!data.inviteUrl) {
+        // no invite URL
+      } else if (typeof QRCode === 'undefined') {
+        console.warn('[convos-setup] QR script failed to load; QR not shown');
       }
 
       // Show QR info section
