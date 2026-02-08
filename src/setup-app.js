@@ -33,7 +33,6 @@
 
   // Buttons
   var startSetupBtn = document.getElementById('startSetup');
-  var completeSetupBtn = document.getElementById('completeSetup');
 
   // API key input
   var authSecretEl = document.getElementById('authSecret');
@@ -304,7 +303,6 @@
             startSetupBtn.disabled = false;
             startSetupBtn.textContent = 'Start Setup';
           }
-          if (completeSetupBtn) completeSetupBtn.style.display = 'none';
           var qrImg = document.getElementById('convos-qr');
           if (qrImg) qrImg.style.display = 'none';
           var qrWrap = document.getElementById('convos-qr-wrap');
@@ -408,9 +406,6 @@
               joinStatusEl.className = 'qr-info-value status joined';
             }
 
-            if (completeSetupBtn) {
-              completeSetupBtn.style.display = 'block';
-            }
             runCompleteSetup();
           }
         }).catch(function () {
@@ -439,11 +434,7 @@
 
   // Finish Setup - calls convos.setup.complete RPC
   function runCompleteSetup() {
-    if (!completeSetupBtn) return;
-
     hideError();
-    completeSetupBtn.disabled = true;
-    completeSetupBtn.textContent = 'Completing setup...';
     showLog('Finalizing Convos configuration...\n');
 
     httpJson('/setup/api/convos/complete-setup', {
@@ -453,25 +444,18 @@
     }).then(function (data) {
       if (data.ok) {
         appendLog('Setup complete!\n');
-        completeSetupBtn.textContent = 'Setup Complete!';
-        completeSetupBtn.classList.add('success');
         setStatus('Ready', 'success');
       } else {
         showError(data.error || 'Setup failed');
-        completeSetupBtn.disabled = false;
-        completeSetupBtn.textContent = 'Finish Setup';
       }
       return refreshStatus();
     }).catch(function (err) {
       appendLog('\nError: ' + String(err) + '\n');
       showError(String(err));
-      completeSetupBtn.disabled = false;
-      completeSetupBtn.textContent = 'Finish Setup';
     });
   }
 
   if (startSetupBtn) startSetupBtn.onclick = runStartSetup;
-  if (completeSetupBtn) completeSetupBtn.onclick = runCompleteSetup;
 
   if (authSecretEl) {
     authSecretEl.addEventListener('input', updateStartSetupEnabled);

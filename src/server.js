@@ -171,8 +171,10 @@ function sleep(ms) {
 const GATEWAY_READY_PROBE_TIMEOUT_MS = 5_000;
 
 async function waitForGatewayReady(opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const timeoutMs = opts.timeoutMs ?? 35_000;
   const start = Date.now();
+  let lastErr = null;
+  let lastLogAt = 0;
   while (Date.now() - start < timeoutMs) {
     if (!gatewayProc) {
       console.error("[gateway] Process exited before becoming ready");
@@ -186,19 +188,28 @@ async function waitForGatewayReady(opts = {}) {
           const t = setTimeout(() => ctrl.abort(), GATEWAY_READY_PROBE_TIMEOUT_MS);
           try {
             const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET", signal: ctrl.signal });
-            if (res) return true;
+            if (res) {
+              console.log("[gateway] Ready at", `${GATEWAY_TARGET}${p}`, "status", res.status);
+              return true;
+            }
           } finally {
             clearTimeout(t);
           }
-        } catch {
-          // try next path
+        } catch (e) {
+          lastErr = e;
+          const now = Date.now();
+          if (now - lastLogAt >= 5000) {
+            console.log("[gateway] Probe path", p, "elapsed", now - start, "ms err:", String(e?.message ?? e));
+            lastLogAt = now;
+          }
         }
       }
-    } catch {
-      // not ready
+    } catch (e) {
+      lastErr = e;
     }
     await sleep(250);
   }
+  console.error("[gateway] Timed out waiting for ready. Last error:", lastErr ? String(lastErr.message ?? lastErr) : "none");
   return false;
 }
 
@@ -249,16 +260,21 @@ async function startGateway() {
     OPENCLAW_GATEWAY_TOKEN,
   ];
 
+  const cmd = [OPENCLAW_NODE, ...clawArgs(args)].join(" ");
+  console.log("[gateway] Starting:", cmd);
+  console.log("[gateway] Config path:", configPath(), "GATEWAY_TARGET:", GATEWAY_TARGET);
+
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: STATE_DIR,
+    OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+    OPENCLAW_CONFIG_PATH: configPath(),
+    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
+    CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
+  };
   const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: ["inherit", "inherit", "pipe"],
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: STATE_DIR,
-      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      // Backward-compat aliases
-      CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR || STATE_DIR,
-      CLAWDBOT_WORKSPACE_DIR: process.env.CLAWDBOT_WORKSPACE_DIR || WORKSPACE_DIR,
-    },
+    env,
   });
   gatewayProc = proc;
 
@@ -293,7 +309,7 @@ async function ensureGatewayRunning() {
     gatewayStarting = (async () => {
       for (let attempt = 1; attempt <= MAX_GATEWAY_RETRIES; attempt++) {
         await startGateway();
-        const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
+        const ready = await waitForGatewayReady({ timeoutMs: 35_000 });
         if (ready) return;
         console.error(`[gateway] Attempt ${attempt}/${MAX_GATEWAY_RETRIES} failed`);
         if (gatewayProc) {
