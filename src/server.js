@@ -96,13 +96,15 @@ restoreAuthCredentials();
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
+const GATEWAY_PROXY_TIMEOUT_MS = Number.parseInt(process.env.GATEWAY_PROXY_TIMEOUT_MS ?? "60000", 10);
+const GATEWAY_HTTP_TIMEOUT_MS = Number.parseInt(process.env.GATEWAY_HTTP_TIMEOUT_MS ?? "30000", 10);
 
 // XMTP environment (production or dev) - controlled via Railway env var
 const XMTP_ENV = process.env.XMTP_ENV || "production";
 
 // Helper for calling Convos HTTP endpoints on the gateway.
 // The Convos plugin exposes REST routes at /convos/setup, /convos/setup/status, /convos/setup/complete.
-async function convosHttp(path, { method = "GET", body } = {}) {
+async function convosHttp(path, { method = "GET", body, timeoutMs = GATEWAY_HTTP_TIMEOUT_MS } = {}) {
   const url = `${GATEWAY_TARGET}${path}`;
   const headers = { Authorization: `Bearer ${OPENCLAW_GATEWAY_TOKEN}` };
   const opts = { method, headers };
@@ -110,12 +112,19 @@ async function convosHttp(path, { method = "GET", body } = {}) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(url, opts);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} ${method} ${path}: ${text}`);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    opts.signal = ctrl.signal;
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${method} ${path}: ${text}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(t);
   }
-  return res.json();
 }
 
 // Always run the built-from-source CLI entry directly to avoid PATH/global-install mismatches.
@@ -161,20 +170,26 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const GATEWAY_READY_PROBE_TIMEOUT_MS = 5_000;
+
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      // Try the default Control UI base path, then fall back to legacy or root.
-      const paths = ["/openclaw", "/clawdbot", "/"]; 
+      const paths = ["/openclaw", "/clawdbot", "/"];
       for (const p of paths) {
         try {
-          const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET" });
-          // Any HTTP response means the port is open.
-          if (res) return true;
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), GATEWAY_READY_PROBE_TIMEOUT_MS);
+          try {
+            const res = await fetch(`${GATEWAY_TARGET}${p}`, { method: "GET", signal: ctrl.signal });
+            if (res) return true;
+          } finally {
+            clearTimeout(t);
+          }
         } catch {
-          // try next
+          // try next path
         }
       }
     } catch {
@@ -363,7 +378,7 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 // One short list: each entry is { model, envVar }; optional customProvider for gateway config.
 // authChoice is only for CLI (buildOnboardArgs) compatibility.
 const AUTH_PROVIDER_OPTIONS = [
-  { model: "openai/gpt-5.2-codex-mini", envVar: "OPENAI_API_KEY",  },
+  { model: "openai/gpt-5.1-codex-mini", envVar: "OPENAI_API_KEY",  },
   { model: "anthropic/claude-opus-4-5", envVar: "ANTHROPIC_API_KEY",  },
   { model: "openai/gpt-5.2", envVar: "OPENAI_API_KEY", },
   { model: "google/gemini-3-pro-preview", envVar: "GEMINI_API_KEY",  },
@@ -1050,6 +1065,7 @@ const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
   ws: true,
   xfwd: true,
+  proxyTimeout: GATEWAY_PROXY_TIMEOUT_MS,
 });
 
 proxy.on("error", (err, _req, _res) => {
