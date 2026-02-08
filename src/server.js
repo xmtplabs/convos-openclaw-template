@@ -176,6 +176,10 @@ async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 20_000;
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (!gatewayProc) {
+      console.error("[gateway] Process exited before becoming ready");
+      return false;
+    }
     try {
       const paths = ["/openclaw", "/clawdbot", "/"];
       for (const p of paths) {
@@ -248,7 +252,7 @@ async function startGateway() {
   ];
 
   const proc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "pipe"],
     env: {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
@@ -260,6 +264,13 @@ async function startGateway() {
   });
   gatewayProc = proc;
 
+  let stderrBuf = "";
+  proc.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    stderrBuf += text;
+    process.stderr.write(`[gateway:err] ${text}`);
+  });
+
   // Only clear gatewayProc if THIS process is still the current one.
   // Prevents a stale exit handler from wiping a newly spawned gateway reference.
   proc.on("error", (err) => {
@@ -268,6 +279,9 @@ async function startGateway() {
   });
 
   proc.on("exit", (code, signal) => {
+    if (code !== 0 && stderrBuf) {
+      console.error(`[gateway] stderr output:\n${stderrBuf}`);
+    }
     console.error(`[gateway] exited code=${code} signal=${signal}`);
     if (gatewayProc === proc) gatewayProc = null;
   });
@@ -277,12 +291,24 @@ async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
   if (gatewayProc) return { ok: true };
   if (!gatewayStarting) {
+    const MAX_GATEWAY_RETRIES = 3;
     gatewayStarting = (async () => {
-      await startGateway();
-      const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
-      if (!ready) {
-        throw new Error("Gateway did not become ready in time");
+      for (let attempt = 1; attempt <= MAX_GATEWAY_RETRIES; attempt++) {
+        await startGateway();
+        const ready = await waitForGatewayReady({ timeoutMs: 20_000 });
+        if (ready) return;
+        console.error(`[gateway] Attempt ${attempt}/${MAX_GATEWAY_RETRIES} failed`);
+        if (gatewayProc) {
+          try {
+            gatewayProc.kill("SIGTERM");
+          } catch {
+            // ignore
+          }
+        }
+        gatewayProc = null;
+        if (attempt < MAX_GATEWAY_RETRIES) await sleep(1000);
       }
+      throw new Error("Gateway did not become ready after retries");
     })().finally(() => {
       gatewayStarting = null;
     });
