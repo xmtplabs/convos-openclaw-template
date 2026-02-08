@@ -402,12 +402,10 @@
               joinStatusEl.className = 'qr-info-value status joined';
             }
 
-            // Show the Finish Setup button
             if (completeSetupBtn) {
               completeSetupBtn.style.display = 'block';
             }
-
-            setStatus('User joined - ready to finish', 'success');
+            runCompleteSetup();
           }
         }).catch(function () {
           // Ignore polling errors
